@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ScreenPilot Browser Test</title>
+  </head>
+  <body>
+    <h1 id="heading">Hello Browser</h1>
+    <button id="action-btn" type="button">Click me</button>
+    <input id="name-input" name="name" type="text" placeholder="Your name" />
+    <div id="scroll-target" style="height: 2000px"></div>
+    <p id="status">idle</p>
+    <script>
+      document.getElementById("action-btn").addEventListener("click", function () {
+        document.getElementById("status").textContent = "clicked";
+      });
+    </script>
+  </body>
+</html>
