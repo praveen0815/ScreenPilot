@@ -9,12 +9,12 @@ from app.agent.planner import build_plan, interpret_intent
 from app.agent.schemas.plan import TaskIntent, TaskPlan
 from app.agent.state import AgentGraphState
 from app.core.errors import AppError
-from app.db.enums import ApprovalStatus, ExecutionStatus, TaskStatus, ToolExecutionStatus
+from app.db.enums import ApprovalStatus, TaskStatus
 from app.db.models.approval_request import ApprovalRequest
 from sqlalchemy import select
 
-from app.db.models.task_step import TaskStep
-from app.safety.effective_permissions import effective_permissions
+from app.events.schemas import TaskEventType
+from app.events.service import publish_task_event
 from app.memory.service import MemoryService
 from app.safety.approval_service import (
     create_task_approvals,
@@ -22,8 +22,7 @@ from app.safety.approval_service import (
     plan_requires_approval,
 )
 from app.services import agent_repository
-from app.tools.contracts import ToolContext
-from app.tools.errors import ToolPermissionError
+from app.workflow.engine import WorkflowContext, WorkflowEngine
 
 
 def _coerce_status(value: TaskStatus | str) -> TaskStatus:
@@ -42,6 +41,13 @@ def compile_agent_graph(ctx, llm: LLMProvider):
             await agent_repository.set_status(
                 ctx.session, task, TaskStatus.CANCELLED, message="Cancelled by user."
             )
+            await publish_task_event(
+                ctx.session,
+                user_id=ctx.user.id,
+                task_id=task.id,
+                event_type=TaskEventType.TASK_CANCELLED,
+                payload={"status": TaskStatus.CANCELLED.value, "message": "Cancelled by user."},
+            )
             return {**state, "cancelled": True, "done": True}
         return state
 
@@ -51,6 +57,13 @@ def compile_agent_graph(ctx, llm: LLMProvider):
         await memory.cleanup_expired(ctx.user.id)
         planning_ctx, _ = await memory.build_planning_context(ctx.user, task)
         await agent_repository.set_status(ctx.session, task, TaskStatus.PLANNING)
+        await publish_task_event(
+            ctx.session,
+            user_id=ctx.user.id,
+            task_id=task.id,
+            event_type=TaskEventType.PLANNING_STARTED,
+            payload={"status": TaskStatus.PLANNING.value},
+        )
         try:
             await memory.append_conversation_user(ctx.user, task, task.instruction)
             intent = await interpret_intent(llm, task.instruction, context=planning_ctx)
@@ -60,6 +73,13 @@ def compile_agent_graph(ctx, llm: LLMProvider):
                 task,
                 TaskStatus.FAILED,
                 message="Intent interpretation failed.",
+            )
+            await publish_task_event(
+                ctx.session,
+                user_id=ctx.user.id,
+                task_id=task.id,
+                event_type=TaskEventType.TASK_FAILED,
+                payload={"status": TaskStatus.FAILED.value, "message": "Intent interpretation failed."},
             )
             return {**state, "planning_failed": True, "failure_message": str(exc), "done": True}
         intent_json = intent.model_dump_json()
@@ -76,10 +96,24 @@ def compile_agent_graph(ctx, llm: LLMProvider):
             built = await build_plan(llm, task.instruction, intent, context=planning_ctx)
         except AppError as exc:
             await agent_repository.set_status(ctx.session, task, TaskStatus.FAILED, message=exc.message)
+            await publish_task_event(
+                ctx.session,
+                user_id=ctx.user.id,
+                task_id=task.id,
+                event_type=TaskEventType.TASK_FAILED,
+                payload={"status": TaskStatus.FAILED.value, "message": exc.message},
+            )
             return {**state, "planning_failed": True, "failure_message": exc.message, "done": True}
         except Exception as exc:
             await agent_repository.set_status(
                 ctx.session, task, TaskStatus.FAILED, message="Planning failed."
+            )
+            await publish_task_event(
+                ctx.session,
+                user_id=ctx.user.id,
+                task_id=task.id,
+                event_type=TaskEventType.TASK_FAILED,
+                payload={"status": TaskStatus.FAILED.value, "message": "Planning failed."},
             )
             return {**state, "planning_failed": True, "failure_message": str(exc), "done": True}
         return {**state, "plan_json": built.model_dump_json()}
@@ -93,6 +127,13 @@ def compile_agent_graph(ctx, llm: LLMProvider):
             await agent_repository.set_status(
                 ctx.session, task, TaskStatus.FAILED, message="Missing plan."
             )
+            await publish_task_event(
+                ctx.session,
+                user_id=ctx.user.id,
+                task_id=task.id,
+                event_type=TaskEventType.TASK_FAILED,
+                payload={"status": TaskStatus.FAILED.value, "message": "Missing plan."},
+            )
             return {**state, "planning_failed": True, "failure_message": "Missing plan.", "done": True}
         plan = TaskPlan.model_validate_json(raw)
         try:
@@ -100,6 +141,13 @@ def compile_agent_graph(ctx, llm: LLMProvider):
         except PlanValidationError as exc:
             await agent_repository.set_status(
                 ctx.session, task, TaskStatus.FAILED, message=exc.message
+            )
+            await publish_task_event(
+                ctx.session,
+                user_id=ctx.user.id,
+                task_id=task.id,
+                event_type=TaskEventType.TASK_FAILED,
+                payload={"status": TaskStatus.FAILED.value, "message": exc.message},
             )
             return {
                 **state,
@@ -123,6 +171,16 @@ def compile_agent_graph(ctx, llm: LLMProvider):
         )
         await create_task_approvals(ctx.session, task=task, user=ctx.user, plan=plan)
         await ctx.session.refresh(task, attribute_names=["approval_requests"])
+        await publish_task_event(
+            ctx.session,
+            user_id=ctx.user.id,
+            task_id=task.id,
+            event_type=TaskEventType.PLAN_GENERATED,
+            payload={
+                "message": f"Plan with {len(plan.steps)} steps.",
+                "status": task.status.value if hasattr(task.status, "value") else str(task.status),
+            },
+        )
         return state
 
     async def approval_gate(state: AgentGraphState) -> AgentGraphState:
@@ -170,6 +228,18 @@ def compile_agent_graph(ctx, llm: LLMProvider):
                 TaskStatus.AWAITING_APPROVAL,
                 message="Plan requires human approval before execution.",
             )
+            approval_id = str(approvals[0].id) if approvals else None
+            await publish_task_event(
+                ctx.session,
+                user_id=ctx.user.id,
+                task_id=task.id,
+                event_type=TaskEventType.APPROVAL_REQUIRED,
+                payload={
+                    "status": TaskStatus.AWAITING_APPROVAL.value,
+                    "message": "Plan requires human approval before execution.",
+                    "approval_id": approval_id,
+                },
+            )
             return {**state, "done": True}
 
         if state.get("resume_execution_only"):
@@ -195,151 +265,31 @@ def compile_agent_graph(ctx, llm: LLMProvider):
             task,
             {"phase": "execution_started", "step_count": len(plan.steps)},
         )
-        steps = sorted(
-            (await ctx.session.scalars(select(TaskStep).where(TaskStep.task_id == task.id))).all(),
-            key=lambda row: row.sequence,
-        )
-        tool_context = ToolContext(
-            task_id=task.id,
-            user_id=ctx.user.id,
-            permissions=effective_permissions(ctx.user),
-            confirmed=True,
-        )
-
-        for index, step in enumerate(steps):
-            task = await agent_repository.refresh_cancel_pause(ctx.session, task)
-            ctx.task = task
-            if task.cancel_requested:
-                await agent_repository.set_status(
-                    ctx.session, task, TaskStatus.CANCELLED, message="Cancelled during execution."
-                )
-                await agent_repository.finish_execution_record(
-                    ctx.session, record, status=ExecutionStatus.CANCELLED, message="Cancelled."
-                )
-                return {**state, "cancelled": True, "done": True}
-            if task.pause_requested:
-                await agent_repository.set_status(ctx.session, task, TaskStatus.PAUSED, message="Paused.")
-                await agent_repository.finish_execution_record(
-                    ctx.session, record, status=ExecutionStatus.CANCELLED, message="Paused."
-                )
-                return {**state, "paused": True, "done": True}
-
-            spec = plan.steps[index]
-            arguments = json.loads(step.arguments_json or "{}")
-            try:
-                result = await ctx.tool_executor.execute(
-                    spec.tool_name,
-                    arguments,
-                    tool_context,
-                    ctx.registry,
-                    session=ctx.session,
-                )
-            except ToolPermissionError as exc:
-                await agent_repository.record_tool_run(
-                    ctx.session,
-                    task=task,
-                    step=step,
-                    tool_name=spec.tool_name,
-                    arguments=arguments,
-                    status=ToolExecutionStatus.BLOCKED,
-                    result=str(exc),
-                )
-                await memory.append_tool_result(
-                    ctx.user,
-                    task,
-                    tool_name=spec.tool_name,
-                    success=False,
-                    output=str(exc),
-                    data=None,
-                )
-                await agent_repository.set_status(
-                    ctx.session, task, TaskStatus.FAILED, message=f"Step {step.sequence} blocked by safety."
-                )
-                await agent_repository.finish_execution_record(
-                    ctx.session, record, status=ExecutionStatus.FAILED, message=str(exc)
-                )
-                return {**state, "planning_failed": True, "failure_message": str(exc), "done": True}
-            except Exception as exc:
-                await agent_repository.record_tool_run(
-                    ctx.session,
-                    task=task,
-                    step=step,
-                    tool_name=spec.tool_name,
-                    arguments=arguments,
-                    status=ToolExecutionStatus.FAILED,
-                    result=str(exc),
-                )
-                await memory.append_tool_result(
-                    ctx.user,
-                    task,
-                    tool_name=spec.tool_name,
-                    success=False,
-                    output=str(exc),
-                    data=None,
-                )
-                await agent_repository.set_status(
-                    ctx.session, task, TaskStatus.FAILED, message=f"Step {step.sequence} failed."
-                )
-                await agent_repository.finish_execution_record(
-                    ctx.session, record, status=ExecutionStatus.FAILED, message=str(exc)
-                )
-                return {**state, "planning_failed": True, "failure_message": str(exc), "done": True}
-
-            if not result.success:
-                failure = result.output or "Tool execution failed."
-                blocked = result.error_code == ToolPermissionError.code
-                await agent_repository.record_tool_run(
-                    ctx.session,
-                    task=task,
-                    step=step,
-                    tool_name=spec.tool_name,
-                    arguments=arguments,
-                    status=ToolExecutionStatus.BLOCKED if blocked else ToolExecutionStatus.FAILED,
-                    result=failure,
-                )
-                await memory.append_tool_result(
-                    ctx.user,
-                    task,
-                    tool_name=spec.tool_name,
-                    success=False,
-                    output=failure,
-                    data=result.data,
-                )
-                await agent_repository.set_status(
-                    ctx.session, task, TaskStatus.FAILED, message=f"Step {step.sequence} failed."
-                )
-                await agent_repository.finish_execution_record(
-                    ctx.session, record, status=ExecutionStatus.FAILED, message=failure
-                )
-                return {**state, "planning_failed": True, "failure_message": failure, "done": True}
-
-            await agent_repository.record_tool_run(
-                ctx.session,
+        engine = WorkflowEngine(
+            WorkflowContext(
+                session=ctx.session,
+                user=ctx.user,
                 task=task,
-                step=step,
-                tool_name=spec.tool_name,
-                arguments=arguments,
-                status=ToolExecutionStatus.SUCCEEDED,
-                result=result.output,
+                tool_executor=ctx.tool_executor,
+                registry=ctx.registry,
             )
-            await memory.append_tool_result(
-                ctx.user,
-                task,
-                tool_name=spec.tool_name,
-                success=True,
-                output=result.output,
-                data=result.data,
-            )
-
-        await agent_repository.set_status(
-            ctx.session, task, TaskStatus.COMPLETED, message="All plan steps completed."
         )
-        await agent_repository.finish_execution_record(
-            ctx.session, record, status=ExecutionStatus.COMPLETED, message="Plan execution completed."
+        result = await engine.run(
+            plan,
+            record=record,
+            resume_from_pause=bool(state.get("resume_from_pause")),
         )
-        await memory.save_task_summary(
-            ctx.user, task, task.outcome_message or "Task completed successfully."
-        )
+        if result.status == "cancelled":
+            return {**state, "cancelled": True, "done": True}
+        if result.status == "paused":
+            return {**state, "paused": True, "done": True}
+        if result.status in {"failed", "blocked"}:
+            return {
+                **state,
+                "planning_failed": True,
+                "failure_message": result.message,
+                "done": True,
+            }
         return {**state, "done": True}
 
     def route_after_cancel(state: AgentGraphState) -> Literal["halt", "interpret", "execute"]:

@@ -9,6 +9,7 @@ from app.api.routes.tools import router as tools_router
 from app.api.routes.desktop_control import router as desktop_control_router
 from app.api.routes.memory import router as memory_router
 from app.api.routes.users import router as users_router
+from app.api.routes.events import router as events_router
 
 api_router = APIRouter()
 api_router.include_router(health_router)
@@ -20,3 +21,4 @@ api_router.include_router(agent_router)
 api_router.include_router(tools_router)
 api_router.include_router(desktop_control_router)
 api_router.include_router(memory_router)
+api_router.include_router(events_router)

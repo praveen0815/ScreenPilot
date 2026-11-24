@@ -44,4 +44,6 @@ asyncio_mode = "auto"
 markers = [
     "integration: tests that require a live PostgreSQL instance",
     "browser: tests that require Playwright Chromium",
+    "e2e: controlled end-to-end scenarios (mock LLM, real API stack)",
+    "security: targeted security validation checks",
 ]

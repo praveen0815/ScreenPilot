@@ -41,7 +41,8 @@ async def test_agent_run_uses_mock_langgraph(sqlite_app_client):
 def test_agent_request_log_omits_instruction(client, caplog):
     with caplog.at_level(logging.INFO, logger="app.request"):
         client.post("/api/agent/runs", json={"instruction": "purchase the item"})
-    assert "/api/agent/runs" in caplog.text
+    record = next(r for r in caplog.records if r.message == "http_request")
+    assert getattr(record, "http_path", None) == "/api/agent/runs"
     assert "purchase the item" not in caplog.text
 
 

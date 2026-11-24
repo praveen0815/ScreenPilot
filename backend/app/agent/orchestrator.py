@@ -12,6 +12,8 @@ from app.db.models.agent_task import AgentTask
 from app.db.models.user import User
 from app.schemas.agent import AgentOutcome
 from app.safety.approval_service import approve_request, expire_pending_approvals, list_pending_approvals
+from app.events.schemas import TaskEventType
+from app.events.service import publish_task_event
 from app.services import agent_repository
 from app.auth.permissions import ROLE_PERMISSIONS
 from app.tools.executor_service import ToolExecutorService
@@ -58,6 +60,17 @@ class AgentOrchestrator:
                 message="Task is waiting for approval before execution can continue.",
                 status_code=409,
             )
+        if resume and status is TaskStatus.PAUSED:
+            task.pause_requested = False
+            await self.session.flush()
+            await publish_task_event(
+                self.session,
+                user_id=user.id,
+                task_id=task.id,
+                event_type=TaskEventType.TASK_RESUMED,
+                payload={"status": TaskStatus.RUNNING.value, "message": "Task resumed from pause."},
+            )
+
         if resume and status is TaskStatus.AWAITING_APPROVAL:
             await expire_pending_approvals(self.session, task)
             await self.session.refresh(task, attribute_names=["approval_requests"])
@@ -80,6 +93,16 @@ class AgentOrchestrator:
                     message="Approve the plan before resuming execution.",
                     status_code=409,
                 )
+            await publish_task_event(
+                self.session,
+                user_id=user.id,
+                task_id=task.id,
+                event_type=TaskEventType.TASK_RESUMED,
+                payload={
+                    "status": TaskStatus.RUNNING.value,
+                    "message": "Task resumed after approval.",
+                },
+            )
 
         if status not in {TaskStatus.PENDING, TaskStatus.AWAITING_APPROVAL, TaskStatus.PAUSED}:
             if status is TaskStatus.RUNNING:
@@ -112,7 +135,9 @@ class AgentOrchestrator:
             "current_step_index": 0,
             "cancelled": task.cancel_requested,
             "paused": task.pause_requested,
-            "resume_execution_only": resume and status is TaskStatus.AWAITING_APPROVAL,
+            "resume_execution_only": resume
+            and status in {TaskStatus.AWAITING_APPROVAL, TaskStatus.PAUSED},
+            "resume_from_pause": resume and status is TaskStatus.PAUSED,
         }
 
         final = await graph.ainvoke(initial)
@@ -135,6 +160,13 @@ class AgentOrchestrator:
             await agent_repository.set_status(
                 self.session, task, TaskStatus.CANCELLED, message="Cancelled by user."
             )
+            await publish_task_event(
+                self.session,
+                user_id=user.id,
+                task_id=task.id,
+                event_type=TaskEventType.TASK_CANCELLED,
+                payload={"status": TaskStatus.CANCELLED.value, "message": "Cancelled by user."},
+            )
         await self.session.flush()
         return task
 
@@ -150,6 +182,13 @@ class AgentOrchestrator:
             )
         task.pause_requested = True
         await agent_repository.set_status(self.session, task, TaskStatus.PAUSED, message="Paused by user.")
+        await publish_task_event(
+            self.session,
+            user_id=user.id,
+            task_id=task.id,
+            event_type=TaskEventType.TASK_PAUSED,
+            payload={"status": TaskStatus.PAUSED.value, "message": "Paused by user."},
+        )
         return task
 
     async def approve_task(self, user: User, task_id: uuid.UUID) -> AgentTask:

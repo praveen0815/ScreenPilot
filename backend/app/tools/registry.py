@@ -68,6 +68,7 @@ def registered_tool_count() -> int:
 def build_registry() -> ToolRegistry:
     global _REGISTERED_TOOL_COUNT
     from app.tools.mock_impl import MockObserveTool, MockSummarizeTool
+    from app.tools.mock_workflow import MockWorkflowAttemptTool
     from app.tools.safe.app_status import AppStatusAdminTool, AppStatusTool
     from app.tools.safe.calculator import CalculatorTool
     from app.tools.safe.current_time import CurrentTimeTool
@@ -85,6 +86,7 @@ def build_registry() -> ToolRegistry:
         TextTransformTool(),
         MockObserveTool(),
         MockSummarizeTool(),
+        MockWorkflowAttemptTool(),
         *all_browser_tools(),
         *all_desktop_tools(),
         *all_vision_tools(),

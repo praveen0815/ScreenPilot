@@ -5,6 +5,7 @@ import App from './App'
 
 describe('App', () => {
   beforeEach(() => {
+    localStorage.clear()
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
@@ -22,10 +23,7 @@ describe('App', () => {
             new Response(
               JSON.stringify({
                 status: 'not_ready',
-                checks: {
-                  database: { status: 'down', detail: 'ConnectionRefusedError' },
-                  redis: { status: 'down', detail: 'ConnectionRefusedError' },
-                },
+                checks: { database: { status: 'down' }, redis: { status: 'down' } },
               }),
               { status: 503 },
             ),
@@ -35,13 +33,7 @@ describe('App', () => {
           return Promise.resolve(
             new Response(
               JSON.stringify({
-                capabilities: [
-                  {
-                    name: 'agent',
-                    state: 'unavailable',
-                    detail: 'LangGraph runtime is not enabled in this build.',
-                  },
-                ],
+                capabilities: [{ name: 'agent', state: 'mock', detail: 'Mock agent.' }],
               }),
               { status: 200 },
             ),
@@ -52,18 +44,11 @@ describe('App', () => {
     )
   })
 
-  it('renders foundation status from the API', async () => {
+  it('redirects unauthenticated users to login', async () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'ScreenPilot', level: 1 })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     })
-
-    expect(screen.getByText('ok')).toBeInTheDocument()
-    expect(screen.getByText('not_ready')).toBeInTheDocument()
-    expect(screen.getByText('agent')).toBeInTheDocument()
-    expect(
-      screen.getByText('LangGraph runtime is not enabled in this build.'),
-    ).toBeInTheDocument()
   })
 })

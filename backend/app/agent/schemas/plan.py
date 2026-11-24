@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.tools.contracts import ToolRisk
+from app.workflow.schemas import WorkflowRunWhen
 from app.tools.registry import build_registry
 
 
@@ -24,6 +25,20 @@ class PlanStepSpec(BaseModel):
     tool_name: str = Field(min_length=1, max_length=120)
     arguments: dict[str, str | int | float | bool] = Field(default_factory=dict)
     risk: ToolRisk = ToolRisk.LOW
+    depends_on: list[int] = Field(default_factory=list, max_length=20)
+    run_when: WorkflowRunWhen = WorkflowRunWhen.ALWAYS
+    retry_max: int = Field(default=0, ge=0, le=10)
+    retry_backoff_seconds: float = Field(default=0.2, ge=0, le=30)
+    timeout_seconds: float | None = Field(default=None, gt=0, le=120)
+    skip_on_failure: bool = False
+    idempotency_key: str | None = Field(default=None, max_length=120)
+
+    @field_validator("depends_on")
+    @classmethod
+    def depends_on_unique(cls, value: list[int]) -> list[int]:
+        if len(set(value)) != len(value):
+            raise ValueError("depends_on must be unique.")
+        return value
 
     @field_validator("tool_name")
     @classmethod

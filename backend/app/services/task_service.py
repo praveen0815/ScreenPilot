@@ -7,6 +7,8 @@ from sqlalchemy.orm import selectinload
 from app.db.enums import TaskStatus
 from app.db.models.agent_task import AgentTask
 from app.db.models.user import User
+from app.events.schemas import TaskEventType
+from app.events.service import publish_task_event
 from app.services.audit_service import record_audit
 
 
@@ -21,6 +23,13 @@ async def create_task(session: AsyncSession, user: User, *, instruction: str) ->
         user_id=user.id,
         task_id=task.id,
         resource_id=str(task.id),
+    )
+    await publish_task_event(
+        session,
+        user_id=user.id,
+        task_id=task.id,
+        event_type=TaskEventType.TASK_CREATED,
+        payload={"status": task.status.value, "message": "Task created."},
     )
     return task
 

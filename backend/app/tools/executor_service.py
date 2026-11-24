@@ -1,11 +1,14 @@
 import asyncio
 import logging
+import uuid
 from collections.abc import Mapping
 from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.events.schemas import TaskEventType
+from app.events.service import publish_task_event
 from app.core.errors import UnknownToolError
 from app.tools.base import BaseTool
 from app.tools.contracts import Tool, ToolContext, ToolMetadata, ToolResult, ToolRisk
@@ -54,6 +57,8 @@ class ToolExecutorService:
         registry: ToolRegistry,
         *,
         session: AsyncSession | None = None,
+        agent_execution_id: uuid.UUID | None = None,
+        step_sequence: int | None = None,
     ) -> ToolResult:
         try:
             tool = registry.get(name)
@@ -82,6 +87,19 @@ class ToolExecutorService:
             },
         )
 
+        if session is not None:
+            await publish_task_event(
+                session,
+                user_id=context.user_id,
+                task_id=context.task_id,
+                event_type=TaskEventType.TOOL_STARTED,
+                payload={
+                    "tool_name": name,
+                    "step_sequence": step_sequence,
+                },
+                agent_execution_id=agent_execution_id,
+            )
+
         timeout = metadata.timeout_seconds or get_settings().tool_default_timeout_seconds
         try:
             await enforce_tool_safety(session, metadata=metadata, context=context, arguments=arguments)
@@ -93,6 +111,20 @@ class ToolExecutorService:
                 "tool_execute_timeout",
                 extra={"tool_name": name, "task_id": str(context.task_id), "timeout_seconds": timeout},
             )
+            if session is not None:
+                await publish_task_event(
+                    session,
+                    user_id=context.user_id,
+                    task_id=context.task_id,
+                    event_type=TaskEventType.TOOL_FAILED,
+                    payload={
+                        "tool_name": name,
+                        "step_sequence": step_sequence,
+                        "outcome_status": ToolTimeoutError.code,
+                        "message": message[:500],
+                    },
+                    agent_execution_id=agent_execution_id,
+                )
             return ToolResult(success=False, output=message, error_code=ToolTimeoutError.code)
         except ToolPermissionError as exc:
             logger.info(
@@ -111,6 +143,19 @@ class ToolExecutorService:
                     tool_name=name,
                     success=False,
                     error_code=exc.code,
+                )
+                await publish_task_event(
+                    session,
+                    user_id=context.user_id,
+                    task_id=context.task_id,
+                    event_type=TaskEventType.TOOL_FAILED,
+                    payload={
+                        "tool_name": name,
+                        "step_sequence": step_sequence,
+                        "outcome_status": exc.code,
+                        "message": exc.message[:500],
+                    },
+                    agent_execution_id=agent_execution_id,
                 )
             return ToolResult(success=False, output=exc.message, error_code=exc.code)
         except ToolError as exc:
@@ -131,12 +176,39 @@ class ToolExecutorService:
                     success=False,
                     error_code=exc.code,
                 )
+                await publish_task_event(
+                    session,
+                    user_id=context.user_id,
+                    task_id=context.task_id,
+                    event_type=TaskEventType.TOOL_FAILED,
+                    payload={
+                        "tool_name": name,
+                        "step_sequence": step_sequence,
+                        "outcome_status": exc.code,
+                        "message": exc.message[:500],
+                    },
+                    agent_execution_id=agent_execution_id,
+                )
             return ToolResult(success=False, output=exc.message, error_code=exc.code)
         except Exception as exc:
             logger.exception(
                 "tool_execute_error",
                 extra={"tool_name": name, "task_id": str(context.task_id)},
             )
+            if session is not None:
+                await publish_task_event(
+                    session,
+                    user_id=context.user_id,
+                    task_id=context.task_id,
+                    event_type=TaskEventType.TOOL_FAILED,
+                    payload={
+                        "tool_name": name,
+                        "step_sequence": step_sequence,
+                        "outcome_status": "tool_execution_error",
+                        "message": str(exc)[:500],
+                    },
+                    agent_execution_id=agent_execution_id,
+                )
             return ToolResult(success=False, output=str(exc), error_code="tool_execution_error")
 
         if not result.success:
@@ -144,6 +216,20 @@ class ToolExecutorService:
                 "tool_execute_failed",
                 extra={"tool_name": name, "task_id": str(context.task_id), "error_code": result.error_code},
             )
+            if session is not None:
+                await publish_task_event(
+                    session,
+                    user_id=context.user_id,
+                    task_id=context.task_id,
+                    event_type=TaskEventType.TOOL_FAILED,
+                    payload={
+                        "tool_name": name,
+                        "step_sequence": step_sequence,
+                        "outcome_status": result.error_code or "failed",
+                        "message": (result.output or "")[:500],
+                    },
+                    agent_execution_id=agent_execution_id,
+                )
         else:
             logger.info(
                 "tool_execute_success",
@@ -156,5 +242,18 @@ class ToolExecutorService:
                     task_id=context.task_id,
                     tool_name=name,
                     success=True,
+                )
+                await publish_task_event(
+                    session,
+                    user_id=context.user_id,
+                    task_id=context.task_id,
+                    event_type=TaskEventType.TOOL_COMPLETED,
+                    payload={
+                        "tool_name": name,
+                        "step_sequence": step_sequence,
+                        "outcome_status": "succeeded",
+                        "message": (result.output or "")[:500],
+                    },
+                    agent_execution_id=agent_execution_id,
                 )
         return result

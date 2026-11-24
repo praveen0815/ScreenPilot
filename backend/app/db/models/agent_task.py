@@ -34,6 +34,7 @@ class AgentTask(TimestampMixin, Base):
     )
     task_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_checkpoint_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    workflow_state_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     owner: Mapped["User"] = relationship(back_populates="tasks")
     memory_entries: Mapped[list["TaskMemoryEntry"]] = relationship(
@@ -50,3 +51,6 @@ class AgentTask(TimestampMixin, Base):
         back_populates="task", cascade="all, delete-orphan"
     )
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="task")
+    task_events: Mapped[list["TaskEvent"]] = relationship(
+        back_populates="task", cascade="all, delete-orphan", order_by="TaskEvent.sequence"
+    )

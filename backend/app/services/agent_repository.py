@@ -112,7 +112,9 @@ async def record_tool_run(
         result_json=result,
     )
     session.add(row)
-    step.status = StepStatus.COMPLETED if status is ToolExecutionStatus.SUCCEEDED else StepStatus.FAILED
+    current = step.status if isinstance(step.status, StepStatus) else StepStatus(step.status)
+    if current is not StepStatus.SKIPPED:
+        step.status = StepStatus.COMPLETED if status is ToolExecutionStatus.SUCCEEDED else StepStatus.FAILED
     await session.flush()
     return row
 

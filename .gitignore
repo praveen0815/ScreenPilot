@@ -12,3 +12,8 @@ frontend/dist/
 .vscode/
 coverage/
 *.log
+*.egg-info/
+backend/screenpilot_backend.egg-info/
+.env.local
+.env.*.local
+frontend/node_modules/.vite/

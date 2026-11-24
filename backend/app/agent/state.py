@@ -15,3 +15,4 @@ class AgentGraphState(TypedDict, total=False):
     failure_message: str | None
     done: bool
     resume_execution_only: bool
+    resume_from_pause: bool

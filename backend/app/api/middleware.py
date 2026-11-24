@@ -24,11 +24,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             duration_ms = (time.perf_counter() - start) * 1000
             response.headers["x-request-id"] = request_id
             logger.info(
-                "%s %s %s %.2fms",
-                request.method,
-                request.url.path,
-                response.status_code,
-                duration_ms,
+                "http_request",
+                extra={
+                    "http_method": request.method,
+                    "http_path": request.url.path,
+                    "http_status": response.status_code,
+                    "duration_ms": round(duration_ms, 2),
+                },
             )
             return response
         finally:

@@ -1,113 +1,121 @@
-# ScreenPilot architecture
+# ScreenPilot architecture (current)
 
-ScreenPilot is a monorepo with a FastAPI backend and a React frontend. Phase 1 lays down configuration, health and readiness probes, migration wiring, and typed boundaries for the agent runtime and automation engines. It does not plan tasks, call an LLM, or perform browser or desktop actions.
+Monorepo: **FastAPI** backend + **React** frontend. Phases 1–13 delivered auth, agent orchestration, tools, automation boundaries, memory, safety, workflow, realtime events, dashboard UI, and a broad pytest/Vitest suite.
 
-## Layers
+## Layer diagram
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  frontend/ — React UI (status, future task surfaces)       │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ HTTP
-┌──────────────────────────────▼──────────────────────────────┐
-│  app/api — routes, middleware, error envelopes              │
-├─────────────────────────────────────────────────────────────┤
-│  app/schemas — request and response contracts               │
-├─────────────────────────────────────────────────────────────┤
-│  app/core — settings, structured logging                    │
-├─────────────────────────────────────────────────────────────┤
-│  app/db — async SQLAlchemy engine, dependency checks        │
-├─────────────────────────────────────────────────────────────┤
-│  app/agent — LangGraph integration boundary (no graph yet)  │
-│  app/tools — registry and executor gate (no tools yet)      │
-│  app/automation — browser, desktop, vision contracts        │
-│  app/safety — confirmation rules, untrusted observations    │
-└─────────────────────────────────────────────────────────────┘
-         │                              │
-         ▼                              ▼
-   PostgreSQL                        Redis
+┌──────────────────────────────────────────────────────────────────┐
+│  frontend/ — React router, auth context, task UI, WS event hook    │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │ HTTP / WebSocket
+┌───────────────────────────────▼──────────────────────────────────┐
+│  app/api — routes, request IDs, JSON logging, error envelopes       │
+├──────────────────────────────────────────────────────────────────┤
+│  app/auth — Argon2, JWT, permissions, task access deps            │
+├──────────────────────────────────────────────────────────────────┤
+│  app/agent — LangGraph graph, orchestrator, mock/real LLM factory │
+├──────────────────────────────────────────────────────────────────┤
+│  app/workflow — engine, conditions, retries, workflow state JSON   │
+├──────────────────────────────────────────────────────────────────┤
+│  app/tools — registry, executor, safe + browser/desktop/vision    │
+├──────────────────────────────────────────────────────────────────┤
+│  app/safety — gateway, approvals, risk, injection, audit           │
+├──────────────────────────────────────────────────────────────────┤
+│  app/memory — scoped stores, planning context, retention           │
+├──────────────────────────────────────────────────────────────────┤
+│  app/events — task event schema, broker, persistence               │
+├──────────────────────────────────────────────────────────────────┤
+│  app/automation — Playwright browser, desktop adapter, vision OCR  │
+├──────────────────────────────────────────────────────────────────┤
+│  app/db — SQLAlchemy models, async session, Alembic               │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │
+                    PostgreSQL ◄┴► Redis (readiness)
 ```
 
-## API surface (Phase 1)
+## Agent workflow (LangGraph)
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/health` | Process liveness (no dependency checks) |
-| GET | `/ready` | Readiness: Postgres and Redis probes |
-| GET | `/api/capabilities` | Lists agent and automation engines as unavailable |
-| POST | `/api/agent/runs` | Validates an instruction, returns 501 |
+1. **check_cancel** — honor `cancel_requested`
+2. **interpret** — mock/real LLM → `TaskIntent`
+3. **plan** — structured `TaskPlan` with tool steps
+4. **validate** — schema + safety (forbidden fields)
+5. **persist_plan** — steps in DB, memory checkpoint, approval rows
+6. **approval_gate** — block or continue on pending/denied approvals
+7. **execute** — `WorkflowEngine` runs steps with tool executor
 
-All error responses use a stable JSON envelope: `{"error": {"code", "message", "details?"}}`.
+Resume paths: after approval or after pause (`resume_from_pause`).
 
-## Future integration points
+## Workflow engine
 
-### LangGraph (`app/agent/boundary.py`)
+- Resolves step order and dependencies
+- Retries, timeouts, conditional branches (`run_when`)
+- Pause/cancel checkpoints in `workflow_state_json`
+- Emits task/step/tool events through `publish_task_event`
+- Budget: `WORKFLOW_MAX_EXECUTIONS_PER_RUN`
 
-Later phases compile a LangGraph workflow in this module only. The `AgentRuntime` protocol in `app/agent/contracts.py` is what the API and task service will call. Phase 1 imports no LangGraph package.
+## Tool registry
 
-### Tools (`app/tools/`)
+Categories:
 
-- `Tool` protocol: validate arguments, execute with a `ToolContext` that carries `task_id` and `confirmed`.
-- `ToolRegistry`: register approved tools by name.
-- `ToolExecutor`: execution gate; Phase 1 refuses every call.
+- **Safe tools** — `tool.calculate`, `tool.app_status`, `tool.text_transform`, `tool.current_time`
+- **Mock tools** — planning/observation/workflow probes
+- **Browser** — session, navigate, DOM actions (Playwright when enabled)
+- **Desktop** — mouse/keyboard/screenshot (mock or PyAutoGUI)
+- **Vision** — OCR/screen understanding (mock or tesseract)
 
-### Browser automation (`app/automation/browser.py`)
+Execution flows through `ToolExecutorService` → safety gateway → tool implementation.
 
-Playwright will implement `BrowserAutomationUnavailable`’s successor. `BrowserCommand` constrains allowed actions and rejects shell fields and non-http(s) navigation URLs.
+## Realtime events
 
-### Desktop automation (`app/automation/desktop.py`)
+- Persisted `task_events` table (Alembic `0007_phase12_task_events`)
+- In-process broker fans out to authenticated WebSocket subscribers
+- REST replay: `GET /api/tasks/{id}/events?after_sequence=`
 
-PyAutoGUI (or a thin adapter) will implement the desktop engine. Commands have no shell or script fields.
+## Data model (Alembic head)
 
-### Vision and OCR (`app/automation/vision.py`)
+**Head revision:** `0007_phase12_task_events`
 
-OCR and vision-model adapters will implement `extract_text` and `answer`. Phase 1 only defines image and question payloads.
+| Revision | Theme |
+|----------|--------|
+| 0001 | Baseline |
+| 0002 | Auth + tasks |
+| 0003 | Agent plan fields |
+| 0004 | Memory |
+| 0005 | Safety + approvals |
+| 0006 | Workflow state |
+| 0007 | Task events |
 
-### Safety
+## Frontend surfaces
 
-- `requires_confirmation` flags high-risk tools and sensitive categories (purchase, send message, delete file, sensitive form submit, irreversible).
-- `UntrustedObservation` wraps page and screen content so future prompts treat it as data, not instructions.
+| Route | Purpose |
+|-------|---------|
+| `/` | Dashboard |
+| `/chat` | Agent chat entry |
+| `/tasks`, `/tasks/:id` | History + detail (timeline, tools, approvals) |
+| `/approvals` | Pending approvals |
+| `/settings`, `/profile` | Preferences + profile |
+| `/login` | Auth |
 
-## Data and migrations
+## Configuration highlights
 
-`app/db/base.py` defines the declarative base. Alembic revision `0001_baseline` is an empty chain head so later phases can add tables without re-initializing migrations.
+See root `.env.example`. Critical flags:
 
-## Testing strategy
+- `LLM_PROVIDER=mock` (default)
+- `BROWSER_ENABLED`, `BROWSER_ALLOW_LOCALHOST`
+- `DESKTOP_ENABLED`, `DESKTOP_ADAPTER`
+- `VISION_ENABLED`, `VISION_OCR_PROVIDER`
 
-- Backend: pytest with FastAPI `TestClient`; dependency checks use closed ports in tests.
-- Frontend: Vitest and Testing Library on the status UI; no fabricated API success in default app code.
+## Testing boundaries
 
-## Phase 2 — persistence and authentication
+- **Default pytest:** SQLite memory DB, mock LLM, no external Postgres
+- **`@integration`:** live PostgreSQL
+- **`@browser`:** Playwright Chromium
+- **`@e2e` / `@security`:** Phase 13 controlled scenarios
 
-| Layer | Responsibility |
-|-------|----------------|
-| `app/db/models` | `User`, `RefreshToken`, `AgentTask`, `TaskStep`, `AgentExecution`, `ToolExecution`, `ApprovalRequest`, `AuditLog` |
-| `app/auth` | Argon2 passwords, JWT access tokens, hashed refresh-token rotation |
-| `app/services` | Register/login, profile updates, user-scoped tasks, audit entries |
-| `app/api/routes/auth` | `/api/auth/*` |
-| `app/api/routes/users` | `/api/users/me` |
-| `app/api/routes/tasks` | `/api/tasks` (owner-scoped) |
+## Explicit non-goals
 
-Access tokens are short-lived; refresh tokens are stored hashed in PostgreSQL and rotated on each refresh. Task list/detail queries always filter by `user_id` (admins may access any task via `can_access_task`).
-
-Alembic head: `0002_phase2_auth_and_tasks`.
-
-## Phase 3 — LangGraph agent core (mock LLM)
-
-| Component | Role |
-|-----------|------|
-| `app/agent/graph.py` | Compiled LangGraph: cancel check → interpret → plan → validate → persist → approval → mock execute |
-| `app/agent/orchestrator.py` | API-facing run/cancel/approve/resume |
-| `app/agent/llm/mock.py` | **Mock only** structured intent + plan (not a real model API) |
-| `app/agent/llm/factory.py` | Provider selection (`LLM_PROVIDER=mock`; other providers return 501) |
-| `app/tools/mock_executor.py` | Executes `mock.observe` / `mock.summarize` only |
-
-Task statuses: `pending`, `planning`, `awaiting_approval`, `running`, `paused`, `completed`, `failed`, `cancelled`.
-
-Alembic head: `0003_agent_plan_fields`.
-
-## Explicit non-goals (still)
-
-- Real OpenAI/Anthropic/etc. LLM adapters (not enabled)
-- Playwright, PyAutoGUI, OCR, or vision inference
-- Autonomous replanning or multi-iteration tool loops beyond the fixed mock plan
+- Production LLM vendor integration
+- Distributed event bus (Redis pub/sub for events)
+- HTTP rate limiting
+- Hosted multi-region deployment manifests beyond Compose

@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     memory_retention_cleanup_enabled: bool = True
     approval_expire_hours: int = Field(default=24, ge=1, le=168)
     safety_require_approval_for_moderate: bool = True
+    workflow_max_executions_per_run: int = Field(default=100, ge=1, le=500)
+    workflow_max_retries_per_step: int = Field(default=3, ge=0, le=10)
+    workflow_max_revision_loops: int = Field(default=2, ge=0, le=10)
 
     @field_validator("database_url")
     @classmethod

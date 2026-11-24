@@ -1,256 +1,259 @@
-# 🖥️ ScreenPilot
+# ScreenPilot
 
-### AI-Powered Desktop & Computer-Use Agent
+ScreenPilot is a **production-oriented AI agent platform** for planning and executing user tasks with a **safety-first** tool layer: JWT-authenticated APIs, human approval for risky actions, a deterministic workflow engine, structured memory, and a React dashboard with **real-time task events**.
 
-ScreenPilot is a production-oriented AI desktop agent designed to evolve into an intelligent system capable of understanding user instructions, planning tasks, and interacting with desktop environments through controlled automation.
+The default stack uses a **mock LLM** for reproducible demos and tests. Browser, desktop, and vision adapters are **optional** and gated by environment flags.
 
-The project follows a modular architecture with a secure backend, persistent task management, authentication, and a modern web interface. It is being developed incrementally, with autonomous execution and computer-use capabilities introduced in later phases.
+## Features
 
----
+| Area | Capability |
+|------|------------|
+| **Auth** | Register/login, Argon2 passwords, JWT access + rotating refresh tokens |
+| **Tasks** | Create, run, pause, resume, cancel; user-scoped persistence |
+| **Agent** | LangGraph orchestration: interpret → plan → validate → approval → workflow execution |
+| **Tools** | Registry with permissions, timeouts, safe calculator, text transform, mock + browser/desktop/vision tools |
+| **Safety** | Risk tiers, injection blocking, confirmation gates, approval workflows, audit logs |
+| **Workflow** | Multi-step runs, retries, conditionals, pause/resume, idempotency keys |
+| **Memory** | Conversation, checkpoints, summaries, preferences, retention |
+| **Realtime** | WebSocket + REST task events (13 event types), persisted ordering |
+| **Frontend** | Dashboard, chat, task detail, approvals, settings, live event timeline |
+| **Ops** | `/health`, `/ready`, structured JSON logs, request IDs, Docker Compose |
 
-## ✨ Features
+## Architecture
 
-- 🔐 **Secure Authentication** — JWT-based authentication with Argon2 password hashing and rotating refresh tokens.
-- 👤 **User Profiles** — Authenticated user profiles and account management.
-- 📋 **Task Management** — User-scoped task creation and persistent storage.
-- 🗄️ **Database Layer** — PostgreSQL with SQLAlchemy async support.
-- 🔄 **Database Migrations** — Schema versioning using Alembic.
-- ⚡ **API Backend** — FastAPI-based REST API.
-- 🎨 **Modern Frontend** — React, TypeScript, Vite, and Tailwind CSS.
-- 🐳 **Containerized Infrastructure** — Docker Compose for the application stack.
-- 🧩 **Modular Architecture** — Clear boundaries for future AI agent and automation integrations.
-- 🛡️ **Capability Boundaries** — Autonomous execution and computer automation remain disabled until implemented.
+```mermaid
+flowchart TB
+  subgraph Client
+    UI[React / Vite UI]
+    WS[WebSocket client]
+  end
 
----
+  subgraph API[FastAPI]
+    R[Routes + middleware]
+    O[Agent orchestrator]
+    G[LangGraph]
+    W[Workflow engine]
+    E[Event broker]
+  end
 
-## 🏗️ Tech Stack
+  subgraph Data
+    PG[(PostgreSQL)]
+    RD[(Redis)]
+  end
 
-| Category | Technologies |
-|---|---|
-| Backend | Python 3.12, FastAPI |
-| Frontend | React, TypeScript, Vite |
-| Styling | Tailwind CSS |
-| Database | PostgreSQL |
-| ORM | SQLAlchemy (Async) |
-| Migrations | Alembic |
-| Authentication | JWT, Argon2 |
-| Cache / Infrastructure | Redis |
-| Testing | Pytest |
-| Deployment | Docker, Docker Compose |
+  subgraph Engines
+    LLM[LLM provider - mock default]
+    TR[Tool registry + executor]
+    BR[Browser / Playwright]
+    DT[Desktop adapter]
+    VS[Vision / OCR]
+  end
 
----
-
-## 📐 Architecture
-
-```text
-                  ┌─────────────────────────┐
-                  │     React Frontend     │
-                  │   TypeScript + Vite     │
-                  └────────────┬────────────┘
-                               │
-                               ▼
-                  ┌─────────────────────────┐
-                  │      FastAPI API       │
-                  │ Authentication / Tasks  │
-                  └────────────┬────────────┘
-                               │
-                 ┌─────────────┼─────────────┐
-                 ▼             ▼             ▼
-           PostgreSQL       Redis      Agent Layer
-           Persistence      Cache       (Future)
-                                           │
-                                           ▼
-                              Browser & Desktop Tools
-                                    (Future)
+  UI --> R
+  WS --> R
+  R --> O --> G --> W
+  W --> TR
+  TR --> BR
+  TR --> DT
+  TR --> VS
+  G --> LLM
+  O --> PG
+  W --> PG
+  E --> PG
+  R --> RD
 ```
 
----
+Deeper design notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## 📁 Project Structure
+## Tech stack
 
-```text
+| Layer | Technologies |
+|-------|----------------|
+| Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, LangGraph |
+| Data | PostgreSQL 16, Redis 7 |
+| Auth | Argon2, PyJWT |
+| Automation | Playwright (optional), PyAutoGUI / mock desktop, mock/tesseract vision |
+| Frontend | React 19, TypeScript, Vite 8, Tailwind 4, React Router |
+| Deploy | Docker Compose (API + nginx frontend + Postgres + Redis) |
+
+## Project structure
+
+```
 ScreenPilot/
-├── backend/
-│   ├── app/
-│   ├── alembic/
-│   ├── tests/
-│   └── ...
-├── frontend/
-│   ├── src/
-│   ├── public/
-│   └── ...
-├── docs/
-│   └── ARCHITECTURE.md
+├── backend/           # FastAPI app, Alembic, pytest (116 tests)
+├── frontend/          # React dashboard, Vitest (10 tests)
+├── docs/              # Architecture, test report, release audit
 ├── docker-compose.yml
-├── .env.example
+├── .env.example       # Template only — never commit .env
 └── README.md
 ```
 
----
+## Prerequisites
 
-## 🚀 Getting Started
+- **Python 3.12+**
+- **Node.js 20+** (24 used in Docker frontend build)
+- **Docker & Docker Compose** (recommended full stack)
+- **Playwright Chromium** (optional; only for browser automation tests/runtime)
 
-### Prerequisites
+## Environment setup
 
-- Python 3.12+
-- Node.js 20+
-- Docker
-- Docker Compose
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/praveen0815/ScreenPilot.git
-cd ScreenPilot
-```
-
-### 2. Configure environment variables
-
-```bash
+```powershell
 copy .env.example .env
 ```
 
-Update `.env` and configure the required values:
+Set at minimum:
 
-- `POSTGRES_PASSWORD`
-- `JWT_SECRET` (use a strong secret with at least 32 characters)
-- `DATABASE_URL` (use the `postgresql+asyncpg://` driver)
+- `JWT_SECRET` — at least 32 characters (required in Docker via `${JWT_SECRET:?...}`)
+- `POSTGRES_PASSWORD` when using Compose Postgres
+- `DATABASE_URL` must use driver `postgresql+asyncpg://`
 
-### 3. Start the application
+See [.env.example](.env.example) for browser, desktop, vision, workflow, and memory toggles.
 
-```bash
+## Docker setup
+
+```powershell
+docker compose config    # validate compose file
 docker compose up --build
 ```
 
-### 4. Access the services
-
 | Service | URL |
-|---|---|
-| 🌐 Web Application | http://localhost:8080 |
-| ⚙️ API | http://localhost:8000 |
-| 📚 Swagger API Docs | http://localhost:8000/docs |
+|---------|-----|
+| API | http://localhost:8000 |
+| OpenAPI | http://localhost:8000/docs |
+| Web (nginx) | http://localhost:8080 |
 
-### 5. Verify API health
+The backend container runs `alembic upgrade head` then Uvicorn (`app/bootstrap.py`).
 
-```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/ready
-curl http://localhost:8000/api/capabilities
-```
+**Docker verification (Phase 15):** `docker compose config` valid; **backend** and **frontend** images build successfully on this machine (2026-11-24). Full `docker compose up` smoke test was not automated in this phase—run locally after setting `.env`.
 
----
+## Local development
 
-## 💻 Local Development
+### Infrastructure only
 
-### Start Infrastructure
-
-```bash
+```powershell
 docker compose up postgres redis
 ```
 
-### Backend Setup
+### Backend
 
 ```powershell
 cd backend
-
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-
 pip install -e ".[dev]"
-
-$env:DATABASE_URL="postgresql+asyncpg://screenpilot:your-password@localhost:5432/screenpilot"
+$env:DATABASE_URL="postgresql+asyncpg://screenpilot:YOUR_PASSWORD@localhost:5432/screenpilot"
 $env:REDIS_URL="redis://localhost:6379/0"
-
+$env:JWT_SECRET="your-local-dev-secret-at-least-32-chars"
 alembic upgrade head
-
 uvicorn app.main:app --reload --port 8000
 ```
 
-### Frontend Setup
+### Frontend
 
-Open a separate terminal:
-
-```bash
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-Frontend development server:
+Open http://localhost:5173 (Vite proxies `/api`, `/health`, `/ready` to port 8000).
 
-```text
-http://localhost:5173
-```
+## API overview
 
----
+Interactive docs: **http://localhost:8000/docs**
 
-## 🧪 Testing
+| Group | Examples |
+|-------|----------|
+| System | `GET /health`, `GET /ready`, `GET /api/capabilities` |
+| Auth | `POST /api/auth/register`, `/login`, `/refresh`, `/logout` |
+| User | `GET/PATCH /api/users/me`, preferences |
+| Tasks | `POST/GET /api/tasks`, `/{id}/run`, `/resume`, `/cancel` |
+| Approvals | `GET /api/tasks/{id}/approvals`, approve/reject |
+| Agent | `POST /api/agent/runs` (auth required) |
+| Tools | `GET /api/tools` |
+| Memory | `GET /api/tasks/{id}/memory` |
+| Events | `GET /api/tasks/{id}/events`, `WS /api/ws/events?token=&task_id=` |
 
-### Backend
+All protected routes require `Authorization: Bearer <access_token>` except WebSocket (token in query string).
 
-```bash
+## Testing
+
+```powershell
+# Backend (SQLite in-memory for most tests)
 cd backend
-pip install -e ".[dev]"
-pytest
-```
+pytest -q
+# 112 passed, 4 skipped (last run 2026-11-24)
 
-### Frontend
+# Browser-marked tests (requires Playwright)
+pytest -q -m browser
 
-```bash
+# Frontend
 cd frontend
-npm install
-npm run test
+npm test
 npm run build
+# 10 passed (last run 2026-11-24)
 ```
 
----
+Details: [docs/PHASE13_TEST_COVERAGE_REPORT.md](docs/PHASE13_TEST_COVERAGE_REPORT.md).
 
-## 🔑 Authentication & Tasks
+## Security
 
-ScreenPilot supports authenticated user registration, login, profile access, and task persistence.
+- User-scoped tasks, approvals, and events; cross-user access returns 404/403.
+- Tool safety gateway blocks secret fields and prompt-injection patterns in arguments.
+- Browser URL policy blocks dangerous schemes and (in production) localhost unless allowed.
+- Event payloads and logs sanitize secret-like keys/values.
+- **Not implemented:** HTTP rate limiting (documented in Phase 13 security tests).
 
-### Register a User
+More: [docs/PHASE15_FINAL_RELEASE_REPORT.md](docs/PHASE15_FINAL_RELEASE_REPORT.md#security-validation-summary).
 
-```bash
-curl -X POST http://localhost:8000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"you@example.com\",\"password\":\"valid-passphrase-1\",\"display_name\":\"You\"}"
-```
+## Demo workflow (mock LLM)
 
-Use the returned `access_token` as a Bearer token when accessing protected endpoints such as:
+1. Register at `/login` in the UI (or via API).
+2. Create a task: *"Summarize the weekly status report"* → **Run** → completes with mock plan (`tool.app_status`, `tool.text_transform`).
+3. Calculator E2E keyword: instruction containing **`e2e-calculator`**.
+4. Risk demo: instruction with **`purchase`** → awaits approval → approve or reject on task/approvals pages.
+5. Open task **Timeline** tab for live WebSocket events (or poll fallback when disconnected).
+6. Optional browser demo: set `BROWSER_ENABLED=true`, `BROWSER_ALLOW_LOCALHOST=true`, install Playwright; use instruction **`e2e-browser`** with a `http://127.0.0.1:...` URL in text (see Phase 13 E2E tests).
 
-- `/api/users/me`
-- `/api/tasks`
----
+## Screenshots
 
-## 🔒 Security & Design Principles
+Add portfolio images under `docs/screenshots/` (not committed with real user data):
 
-- Authentication required for protected operations.
-- Password hashing using Argon2.
-- Refresh-token rotation.
-- User-scoped task persistence.
-- Separation between API, persistence, and future execution layers.
-- Autonomous execution disabled by default during foundational development.
+| Suggested capture | File name |
+|-------------------|-----------|
+| Dashboard / task list | `dashboard.png` |
+| Task detail + plan steps | `task-detail.png` |
+| Approval card | `approvals.png` |
+| Realtime event timeline | `events-timeline.png` |
 
----
+Reference them in your README or portfolio with relative paths only.
 
-## 🎯 Vision
+## Limitations
 
-ScreenPilot aims to bridge the gap between AI reasoning and real-world computer interaction.
+| Item | Status |
+|------|--------|
+| Real LLM (OpenAI, etc.) | Not wired; `LLM_PROVIDER=mock` only |
+| Rate limiting | Not implemented |
+| Redis in app logic | Used for readiness checks; not primary event bus |
+| Playwright in Docker | Not enabled by default in backend image |
+| Multi-tenant admin UI | Role exists; limited admin surfaces |
 
-The long-term goal is to build an intelligent desktop agent that can:
+Full audit: [docs/PHASE15_FINAL_RELEASE_REPORT.md](docs/PHASE15_FINAL_RELEASE_REPORT.md).
 
-- Understand natural-language instructions.
-- Break complex tasks into actionable steps.
-- Plan and execute workflows.
-- Interact with browser and desktop applications.
-- Maintain task context and execution history.
-- Operate through controlled and observable automation.
+## Documentation index
 
----
+| Document | Purpose |
+|----------|---------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design (current) |
+| [docs/PHASE13_TEST_COVERAGE_REPORT.md](docs/PHASE13_TEST_COVERAGE_REPORT.md) | Tests & security matrix |
+| [docs/PHASE15_FINAL_RELEASE_REPORT.md](docs/PHASE15_FINAL_RELEASE_REPORT.md) | Release audit & portfolio |
+| [docs/PORTFOLIO.md](docs/PORTFOLIO.md) | Interview / resume narrative |
+| [docs/GITHUB_RELEASE_CHECKLIST.md](docs/GITHUB_RELEASE_CHECKLIST.md) | Publish checklist |
 
-## 👨‍💻 Author
+## License
 
-**Praveen Kumar**
+Specify license in repository settings if not yet added (`LICENSE` file).
 
----
+## Version
+
+Recommended tag for this milestone: **`v0.15.0`** (portfolio / phase 15 release). See GitHub checklist for steps.

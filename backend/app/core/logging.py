@@ -4,6 +4,9 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
+task_id_var: ContextVar[str | None] = ContextVar("task_id", default=None)
+agent_execution_id_var: ContextVar[str | None] = ContextVar("agent_execution_id", default=None)
+tool_execution_id_var: ContextVar[str | None] = ContextVar("tool_execution_id", default=None)
 
 
 class JsonFormatter(logging.Formatter):
@@ -17,8 +20,27 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
         request_id = request_id_var.get()
-        if request_id is not None:
-            payload["request_id"] = request_id
+        for key in (
+            "request_id",
+            "task_id",
+            "agent_execution_id",
+            "tool_execution_id",
+            "event_id",
+            "event_type",
+            "sequence",
+            "user_id",
+            "duration_ms",
+            "http_method",
+            "http_path",
+            "http_status",
+        ):
+            value = getattr(record, key, None)
+            if value is None and key == "request_id":
+                value = request_id_var.get()
+            elif value is None and key == "task_id":
+                value = task_id_var.get()
+            if value is not None:
+                payload[key] = value
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)

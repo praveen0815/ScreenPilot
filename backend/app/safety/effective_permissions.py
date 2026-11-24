@@ -1,11 +1,15 @@
 import json
 from typing import Any
 
+from sqlalchemy import inspect as sa_inspect
+
 from app.auth.permissions import ROLE_PERMISSIONS, Permission
 from app.db.models.user import User
 
 
 def _preference_flags(user: User) -> dict[str, Any]:
+    if "agent_preferences" in sa_inspect(user).unloaded:
+        return {}
     prefs = user.agent_preferences
     if prefs is None or not prefs.preferences_json:
         return {}

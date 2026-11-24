@@ -3,6 +3,7 @@ import json
 from pydantic import ValidationError
 
 from app.agent.schemas.plan import TaskPlan, registered_tool_names
+from app.workflow.dependencies import WorkflowDependencyError, validate_step_dependencies
 from app.safety.risk import ActionRiskLevel, classify_tool
 from app.tools.contracts import ToolRisk
 from app.tools.registry import build_registry
@@ -19,6 +20,10 @@ def validate_plan(plan: TaskPlan) -> None:
     settings = get_settings()
     if len(plan.steps) > settings.agent_max_plan_steps:
         raise PlanValidationError("Plan has too many steps.")
+    try:
+        validate_step_dependencies(plan)
+    except WorkflowDependencyError as exc:
+        raise PlanValidationError(exc.message) from exc
     registry = build_registry()
     allowed = registered_tool_names()
     for step in plan.steps:
