@@ -7,7 +7,10 @@ from pathlib import Path
 
 def main() -> None:
     from app.core.config import get_settings
+    from app.core.database_url import apply_compose_database_url
     from app.core.logging import configure_logging
+
+    apply_compose_database_url()
 
     backend_root = Path(__file__).resolve().parents[1]
     settings = get_settings()

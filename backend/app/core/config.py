@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.database_url import apply_compose_database_url
+
 
 class Settings(BaseSettings):
     """Runtime configuration loaded from environment variables."""
@@ -105,5 +107,14 @@ class Settings(BaseSettings):
 
 
 @lru_cache
-def get_settings() -> Settings:
+def _load_settings() -> Settings:
     return Settings()
+
+
+def get_settings() -> Settings:
+    if apply_compose_database_url() is not None:
+        _load_settings.cache_clear()
+    return _load_settings()
+
+
+get_settings.cache_clear = _load_settings.cache_clear  # type: ignore[attr-defined]

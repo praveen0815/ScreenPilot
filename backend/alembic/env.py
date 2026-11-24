@@ -21,6 +21,7 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
+    get_settings.cache_clear()
     return get_settings().database_url
 
 
